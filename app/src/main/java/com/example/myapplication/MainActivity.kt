@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.myapplication.ble.BleViewModel
 import com.example.myapplication.ui.components.RespiSyncBottomNav
 import com.example.myapplication.ui.components.RespiSyncDrawerContent
 import com.example.myapplication.ui.components.RespiSyncTopBar
@@ -28,6 +30,9 @@ class MainActivity : ComponentActivity() {
 
             val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
             val scope = rememberCoroutineScope()
+
+            // ★ BleViewModel을 Activity 범위에서 생성하여 모든 화면에 공유
+            val bleViewModel: BleViewModel = viewModel()
 
             RespiSyncTheme(darkTheme = isDarkMode) {
                 if (!isStarted) {
@@ -73,9 +78,9 @@ class MainActivity : ComponentActivity() {
                             Box(modifier = Modifier.padding(paddingValues)) {
                                 Crossfade(targetState = selectedTab, label = "TabCrossfade") { tab ->
                                     when (tab) {
-                                        0 -> DevicePairingScreen()
-                                        1 -> TelemetryDashboardScreen()
-                                        2 -> ControlPanelScreen()
+                                        0 -> DevicePairingScreen(bleViewModel)
+                                        1 -> TelemetryDashboardScreen(bleViewModel)
+                                        2 -> ControlPanelScreen(bleViewModel)
                                         3 -> CalibrationScreen()
                                     }
                                 }
