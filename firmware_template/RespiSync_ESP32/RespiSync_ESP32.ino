@@ -3,25 +3,25 @@
  * [RespiSync] 스마트 객담 배출 조끼 - ESP32 Dual-Core 펌웨어
  * ============================================================================
  * 
- * 📋 역할 요약:
+ * 역할 요약:
  *   - Core 0: 흉부 센서 ADC 읽기 → 이동평균 필터 → 호기/흡기 위상 판별
  *   - Core 1: BLE GATT Server 운영 + 모터 자체 주기 구동 + 텔레메트리 송신
  *
- * 🔌 하드웨어 연결:
+ * 하드웨어 연결:
  *   - GPIO 34: 흉부 압력 센서 (ADC, 아날로그 입력 전용 핀)
  *   - GPIO 18: 타격 모터 제어 (디지털 출력, HIGH = ON)
  *
- * 📡 BLE 프로토콜:
+ * BLE 프로토콜:
  *   - 앱 → ESP32: 고정 8바이트 명령 패킷 (Write)
  *   - ESP32 → 앱: 고정 12바이트 텔레메트리 패킷 (Notify, 20~50Hz)
  *
- * ⚠️ 보드를 받은 후 해야 할 일:
+ * 보드를 받은 후 해야 할 일:
  *   1. Arduino IDE에서 "ESP32 Dev Module" 보드 선택
  *   2. 라이브러리 매니저에서 "NimBLE-Arduino" 설치 (h2zero 제작)
  *   3. 이 파일을 업로드
  *   4. 시리얼 모니터 115200 baud로 동작 확인
  *
- * 🔧 추후 수정이 필요한 부분은 모두 [TODO] 또는 [TUNE] 태그로 표시됨
+ * 추후 수정이 필요한 부분은 모두 [TODO] 또는 [TUNE] 태그로 표시됨
  * ============================================================================
  */
 
@@ -68,18 +68,12 @@
 #define PHASE_INHALE   0x01  // 흡기 (들숨) - 압력 증가
 #define PHASE_EXHALE   0x02  // 호기 (날숨) - 압력 감소, 타격 적합 시점
 
-// ============================================================================
-// [이동평균 필터 설정]
-// ============================================================================
-#define FILTER_WINDOW_SIZE  10  // [TUNE] 이동평균 윈도우 크기 (10 = 100ms 구간 평균)
-                                // 값이 크면 안정적이지만 반응 느림
-                                // 값이 작으면 민감하지만 노이즈에 취약
 
 // ============================================================================
 // [텔레메트리 송신 주기]
 // ============================================================================
 #define TELEMETRY_INTERVAL_MS  50  // [TUNE] 50ms = 20Hz (앱 요구사항: 20~50Hz)
-                                    // 20ms로 변경하면 50Hz
+                                    // 20ms로 변경하면 50Hz<이걸로 변경 수신은 이걸로 확정>
 
 // ============================================================================
 // 전역 변수 (Core 간 공유 - volatile 또는 Mutex 보호)
@@ -101,12 +95,6 @@ volatile bool g_bleConnected = false;
 // --- BLE 객체 포인터 ---
 NimBLECharacteristic* pTxCharacteristic = nullptr;  // Notify용 TX 캐릭터리스틱
 
-// ============================================================================
-// [이동평균 필터 버퍼] - Core 0에서 사용
-// ============================================================================
-int16_t filterBuffer[FILTER_WINDOW_SIZE] = {0};
-int     filterIndex = 0;
-int32_t filterSum = 0;
 
 // ============================================================================
 // [BLE 콜백 클래스] - 연결/해제 이벤트 처리
@@ -316,27 +304,6 @@ void sendTelemetry() {
  */
 void respirationTask(void* parameter) {
     Serial.println("[Core 0] 호흡 인지 태스크 시작");
-    
-    int16_t prevFiltered = 0;  // 이전 필터값 (기울기 계산용)
-    
-    // [TUNE] 호기/흡기 판별 임계값 - 센서 특성에 따라 조정 필요
-    const int16_t SLOPE_THRESHOLD_INHALE = 5;   // 이 이상 증가하면 흡기
-    const int16_t SLOPE_THRESHOLD_EXHALE = -5;  // 이 이하로 감소하면 호기
-    // ※ 보드와 센서를 받은 후, 시리얼 모니터로 실제 기울기값을 관찰하면서
-    //   이 임계값을 조정하세요. 처음엔 ±10 정도로 시작 권장.
-
-    for (;;) {  // 무한 루프 (FreeRTOS 태스크)
-        // 1단계: ADC 읽기
-        int16_t rawValue = analogRead(PIN_CHEST_SENSOR);
-        
-        // 2단계: 이동평균 필터 적용
-        filterSum -= filterBuffer[filterIndex];
-        filterBuffer[filterIndex] = rawValue;
-        filterSum += rawValue;
-        filterIndex = (filterIndex + 1) % FILTER_WINDOW_SIZE;
-        
-        int16_t filtered = (int16_t)(filterSum / FILTER_WINDOW_SIZE);
-        g_filteredPressure = filtered;  // Core 1과 공유
         
         // =====================================================================
         // [ALGORITHM] ★ 호기/흡기 인지 알고리즘 - 이 부분을 교체하세요 ★
@@ -357,18 +324,6 @@ void respirationTask(void* parameter) {
         //
         // 출력해야 할 것:
         //   - g_respirationPhase = PHASE_INHALE or PHASE_EXHALE or PHASE_NONE
-        // =====================================================================
-        
-        int16_t slope = filtered - prevFiltered;
-        
-        if (slope >= SLOPE_THRESHOLD_INHALE) {
-            g_respirationPhase = PHASE_INHALE;   // 압력 증가 = 흡기 (들숨)
-        } else if (slope <= SLOPE_THRESHOLD_EXHALE) {
-            g_respirationPhase = PHASE_EXHALE;   // 압력 감소 = 호기 (날숨)
-        }
-        // slope가 임계값 사이면 이전 상태 유지 (채터링 방지)
-        
-        prevFiltered = filtered;
         
         // =====================================================================
         // [ALGORITHM 끝]
@@ -376,7 +331,6 @@ void respirationTask(void* parameter) {
         
         // 10ms 대기 (100Hz 샘플링 주기)
         vTaskDelay(pdMS_TO_TICKS(10));
-    }
 }
 
 // ============================================================================

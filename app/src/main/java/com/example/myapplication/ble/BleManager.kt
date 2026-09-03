@@ -29,7 +29,7 @@ import java.util.UUID
  *   bleManager.sendStart(periodMs)  // 타격 시작 명령
  *   bleManager.sendStop()           // 정지 명령
  *
- * ⚠️ 주의: 이 클래스를 사용하려면 AndroidManifest.xml에 BLE 권한이 필요합니다.
+ * 주의: 이 클래스를 사용하려면 AndroidManifest.xml에 BLE 권한이 필요합니다.
  *    (BLUETOOTH_SCAN, BLUETOOTH_CONNECT, ACCESS_FINE_LOCATION)
  * ============================================================================
  */
