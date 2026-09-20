@@ -6,6 +6,7 @@ import android.bluetooth.le.*
 import android.content.Context
 import android.os.ParcelUuid
 import android.util.Log
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,6 +20,7 @@ import java.util.UUID
  * 역할:
  *   - BLE 스캔 (ESP32 디바이스 검색)
  *   - GATT 연결/해제 관리
+ *   - 예기치 않은 연결 끊김(전원 OFF/거리 이탈) 시 자동 재연결(Auto-Reconnect)
  *   - 8바이트 명령 패킷 빌더 + Write
  *   - 12바이트 텔레메트리 패킷 파서 + Notify 수신
  *
@@ -109,6 +111,7 @@ enum class BleConnectionState {
     SCANNING,      // 스캔 중
     CONNECTING,    // 연결 시도 중
     CONNECTED,     // 연결 완료 (서비스 디스커버리 완료)
+    RECONNECTING,  // 자동 재연결 시도 중 (ESP32 전원 재부팅 감지 대기)
     DISCONNECTING  // 연결 해제 중
 }
 
@@ -141,6 +144,9 @@ class BleManager private constructor(private val context: Context) {
         }
     }
 
+    // --- 코루틴 스코프 (자동 재연결 및 비동기 작업용) ---
+    private val managerScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+
     // --- 외부 관찰용 StateFlow ---
     private val _connectionState = MutableStateFlow(BleConnectionState.DISCONNECTED)
     val connectionState: StateFlow<BleConnectionState> = _connectionState.asStateFlow()
@@ -163,6 +169,12 @@ class BleManager private constructor(private val context: Context) {
     private var bluetoothGatt: BluetoothGatt? = null
     private var rxCharacteristic: BluetoothGattCharacteristic? = null
     private var bleScanner: BluetoothLeScanner? = null
+
+    // --- 자동 재연결 관련 변수 ---
+    private var lastConnectedDevice: BluetoothDevice? = null
+    private var isExplicitDisconnect = false
+    private var autoReconnectJob: Job? = null
+    private var reconnectScanCallback: ScanCallback? = null
 
     // ========================================================================
     // [스캔 관련]
@@ -197,7 +209,6 @@ class BleManager private constructor(private val context: Context) {
 
         scanner.startScan(listOf(filter), settings, scanCallback)
         Log.i(TAG, "BLE 스캔 시작 (Service UUID 필터)")
-
         // [TODO] 10초 타임아웃 후 자동 정지하려면 Handler.postDelayed 사용
     }
 
@@ -249,11 +260,15 @@ class BleManager private constructor(private val context: Context) {
      */
     fun connectToDevice(device: BluetoothDevice) {
         stopScan()  // 연결 시도 전 스캔 정지
+        cancelAutoReconnect() // 진행 중인 재연결 중단
+        isExplicitDisconnect = false
+        lastConnectedDevice = device
 
         _connectionState.value = BleConnectionState.CONNECTING
         Log.i(TAG, "연결 시도: ${device.name} (${device.address})")
 
-        // autoConnect=false: 즉시 연결 시도 (true면 디바이스가 범위에 들어올 때까지 대기)
+        // 기존 연결 안전하게 정리 후 재연결
+        bluetoothGatt?.close()
         bluetoothGatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
     }
 
@@ -265,13 +280,99 @@ class BleManager private constructor(private val context: Context) {
     }
 
     /**
-     * GATT 연결 해제
+     * GATT 연결 해제 (사용자가 직접 명시적으로 해제할 때 호출)
      */
     fun disconnect() {
+        isExplicitDisconnect = true
+        cancelAutoReconnect()
+
         _connectionState.value = BleConnectionState.DISCONNECTING
         bluetoothGatt?.let { gatt ->
             gatt.disconnect()
             // close()는 onConnectionStateChange 콜백에서 호출
+        } ?: run {
+            _connectionState.value = BleConnectionState.DISCONNECTED
+        }
+    }
+
+    /**
+     * 자동 재연결 프로세스 취소
+     */
+    fun cancelAutoReconnect() {
+        autoReconnectJob?.cancel()
+        autoReconnectJob = null
+        reconnectScanCallback?.let { callback ->
+            try {
+                bluetoothAdapter?.bluetoothLeScanner?.stopScan(callback)
+            } catch (e: Exception) {
+                Log.w(TAG, "재연결 스캔 중지 예외: ${e.message}")
+            }
+        }
+        reconnectScanCallback = null
+    }
+
+    /**
+     * ★ 자동 재연결 시작 (ESP32 전원 꺼짐 등으로 예기치 않게 끊겼을 때)
+     * - 타겟 디바이스(MAC 주소)를 필터링하여 스캔을 즉시 시작
+     * - ESP32 전원이 다시 켜져 부팅 광고(Advertising)를 시작하면 1~2초 내 즉시 감지하여 자동 재연결 수행
+     */
+    private fun startAutoReconnect() {
+        val target = lastConnectedDevice ?: run {
+            _connectionState.value = BleConnectionState.DISCONNECTED
+            return
+        }
+
+        cancelAutoReconnect()
+        _connectionState.value = BleConnectionState.RECONNECTING
+        Log.i(TAG, "★ ESP32 전원 꺼짐/신호 끊김 감지 -> 자동 재연결 대기 시작: ${target.address}")
+
+        autoReconnectJob = managerScope.launch {
+            val scanner = bluetoothAdapter?.bluetoothLeScanner
+            if (scanner == null || !isBluetoothEnabled()) {
+                Log.w(TAG, "블루투스가 꺼져 있어 자동 재연결 불가")
+                _connectionState.value = BleConnectionState.DISCONNECTED
+                return@launch
+            }
+
+            val filter = ScanFilter.Builder()
+                .setDeviceAddress(target.address)
+                .build()
+
+            val settings = ScanSettings.Builder()
+                .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                .build()
+
+            val callback = object : ScanCallback() {
+                override fun onScanResult(callbackType: Int, result: ScanResult) {
+                    if (result.device.address.equals(target.address, ignoreCase = true)) {
+                        Log.i(TAG, "★ ESP32 재부팅 감지! 즉시 재연결 수행: ${result.device.address}")
+                        cancelAutoReconnect()
+                        connectToDevice(result.device)
+                    }
+                }
+
+                override fun onScanFailed(errorCode: Int) {
+                    Log.e(TAG, "자동 재연결 스캔 실패: errorCode=$errorCode")
+                }
+            }
+
+            reconnectScanCallback = callback
+
+            try {
+                scanner.startScan(listOf(filter), settings, callback)
+                Log.i(TAG, "ESP32 광고 비콘 대기 중...")
+
+                // 취소될 때까지 코루틴 유지
+                while (isActive) {
+                    delay(3000)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "자동 재연결 스캔 예외 발생", e)
+            } finally {
+                try {
+                    scanner.stopScan(callback)
+                } catch (_: Exception) {}
+            }
         }
     }
 
@@ -282,15 +383,22 @@ class BleManager private constructor(private val context: Context) {
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
                     Log.i(TAG, "GATT 연결 성공! 서비스 디스커버리 시작...")
+                    cancelAutoReconnect()
                     gatt.discoverServices()  // 연결 직후 서비스 탐색 필수
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
-                    Log.i(TAG, "GATT 연결 해제됨")
+                    Log.i(TAG, "GATT 연결 해제됨 (status=$status, isExplicit=$isExplicitDisconnect)")
                     gatt.close()
                     bluetoothGatt = null
                     rxCharacteristic = null
-                    _connectionState.value = BleConnectionState.DISCONNECTED
                     _telemetryData.value = TelemetryData()  // 텔레메트리 초기화
+
+                    // 사용자가 명시적으로 끊은 게 아니고 이전 연결 기기가 있다면 -> 자동 재연결 시작
+                    if (!isExplicitDisconnect && lastConnectedDevice != null) {
+                        startAutoReconnect()
+                    } else {
+                        _connectionState.value = BleConnectionState.DISCONNECTED
+                    }
                 }
             }
         }
@@ -335,6 +443,7 @@ class BleManager private constructor(private val context: Context) {
                 Log.e(TAG, "TX 캐릭터리스틱을 찾을 수 없음!")
             }
 
+            cancelAutoReconnect()
             _connectionState.value = BleConnectionState.CONNECTED
             Log.i(TAG, "★ BLE 연결 완료 - 명령 전송/텔레메트리 수신 가능")
         }
@@ -507,6 +616,8 @@ class BleManager private constructor(private val context: Context) {
 
     /** 리소스 정리 (Activity onDestroy 시 호출) */
     fun cleanup() {
+        isExplicitDisconnect = true
+        cancelAutoReconnect()
         stopScan()
         bluetoothGatt?.let { gatt ->
             gatt.disconnect()

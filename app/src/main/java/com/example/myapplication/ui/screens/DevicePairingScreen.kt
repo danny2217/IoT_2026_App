@@ -103,6 +103,37 @@ fun DevicePairingScreen(bleViewModel: BleViewModel = viewModel()) {
                 Text("연결 중...", fontSize = 12.sp, color = Color.Gray)
                 Spacer(Modifier.height(8.dp))
             }
+            BleConnectionState.RECONNECTING -> {
+                Surface(
+                    color = Color(0xFFFF9800).copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = Color(0xFFF57C00)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "기기 재부팅 대기 중 (자동 재연결)",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                color = Color(0xFFF57C00)
+                            )
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "ESP32 전원이 켜지면 즉시 자동으로 다시 연결됩니다.",
+                            fontSize = 11.sp,
+                            color = Color.DarkGray
+                        )
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+            }
             else -> {}
         }
 
@@ -115,19 +146,26 @@ fun DevicePairingScreen(bleViewModel: BleViewModel = viewModel()) {
 
         // --- 레이더 펄스 중앙 아이콘 ---
         Box(contentAlignment = Alignment.Center, modifier = Modifier.size(140.dp)) {
-            if (isScanning) {
+            if (isScanning || connectionState == BleConnectionState.RECONNECTING) {
                 Box(
                     modifier = Modifier
                         .size(100.dp)
                         .scale(scale)
                         .clip(CircleShape)
-                        .background(MedicalBlueContainer.copy(alpha = alpha))
+                        .background(
+                            if (connectionState == BleConnectionState.RECONNECTING)
+                                Color(0xFFFF9800).copy(alpha = alpha)
+                            else MedicalBlueContainer.copy(alpha = alpha)
+                        )
                 )
             }
             Surface(
                 shape = CircleShape,
-                color = if (connectionState == BleConnectionState.CONNECTED)
-                    Color(0xFF4CAF50) else MedicalBlueContainer,
+                color = when (connectionState) {
+                    BleConnectionState.CONNECTED -> Color(0xFF4CAF50)
+                    BleConnectionState.RECONNECTING -> Color(0xFFFFA000)
+                    else -> MedicalBlueContainer
+                },
                 shadowElevation = 6.dp,
                 modifier = Modifier.size(64.dp)
             ) {
@@ -239,7 +277,7 @@ fun DevicePairingScreen(bleViewModel: BleViewModel = viewModel()) {
                     scannedDevices.forEach { device ->
                         DeviceRow(
                             device = device,
-                            isConnecting = connectionState == BleConnectionState.CONNECTING,
+                            isConnecting = connectionState == BleConnectionState.CONNECTING || connectionState == BleConnectionState.RECONNECTING,
                             isConnected = connectionState == BleConnectionState.CONNECTED,
                             onConnectClick = { bleViewModel.connectToDevice(device) }
                         )
@@ -251,8 +289,8 @@ fun DevicePairingScreen(bleViewModel: BleViewModel = viewModel()) {
 
         Spacer(Modifier.weight(1f))
 
-        // --- 연결 해제 버튼 (연결된 상태에서만 표시) ---
-        if (connectionState == BleConnectionState.CONNECTED) {
+        // --- 연결 해제 / 재연결 취소 버튼 (연결 중이거나 재연결 중일 때 표시) ---
+        if (connectionState == BleConnectionState.CONNECTED || connectionState == BleConnectionState.RECONNECTING) {
             OutlinedButton(
                 onClick = { bleViewModel.disconnect() },
                 modifier = Modifier
@@ -263,7 +301,10 @@ fun DevicePairingScreen(bleViewModel: BleViewModel = viewModel()) {
             ) {
                 Icon(Icons.Default.LinkOff, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
-                Text("연결 해제", fontWeight = FontWeight.Bold)
+                Text(
+                    if (connectionState == BleConnectionState.RECONNECTING) "자동 재연결 취소" else "연결 해제",
+                    fontWeight = FontWeight.Bold
+                )
             }
             Spacer(Modifier.height(12.dp))
         }
@@ -284,7 +325,7 @@ fun DevicePairingScreen(bleViewModel: BleViewModel = viewModel()) {
                 .height(52.dp),
             shape = RoundedCornerShape(26.dp),
             colors = ButtonDefaults.buttonColors(containerColor = MedicalBlueContainer),
-            enabled = connectionState != BleConnectionState.CONNECTING
+            enabled = connectionState != BleConnectionState.CONNECTING && connectionState != BleConnectionState.RECONNECTING
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.Radar, contentDescription = null)

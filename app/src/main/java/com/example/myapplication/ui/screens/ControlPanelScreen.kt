@@ -59,11 +59,16 @@ fun ControlPanelScreen(bleViewModel: BleViewModel = viewModel()) {
         // --- 연결 상태 표시 + 동작 상태 배지 ---
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(
-                selected = isConnected,
+                selected = isConnected || connectionState == BleConnectionState.RECONNECTING,
                 onClick = {},
                 label = {
                     Text(
-                        if (isConnected) "BLE: Connected" else "BLE: Disconnected",
+                        when (connectionState) {
+                            BleConnectionState.CONNECTED -> "BLE: Connected"
+                            BleConnectionState.RECONNECTING -> "BLE: Reconnecting..."
+                            BleConnectionState.CONNECTING -> "BLE: Connecting..."
+                            else -> "BLE: Disconnected"
+                        },
                         fontSize = 12.sp
                     )
                 },
@@ -72,7 +77,11 @@ fun ControlPanelScreen(bleViewModel: BleViewModel = viewModel()) {
                         Icons.Default.CheckCircle,
                         contentDescription = null,
                         modifier = Modifier.size(16.dp),
-                        tint = if (isConnected) Color(0xFF4CAF50) else Color.Gray
+                        tint = when (connectionState) {
+                            BleConnectionState.CONNECTED -> Color(0xFF4CAF50)
+                            BleConnectionState.RECONNECTING -> Color(0xFFFFA000)
+                            else -> Color.Gray
+                        }
                     )
                 }
             )

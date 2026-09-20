@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -261,7 +262,12 @@ fun TelemetryDashboardScreen(bleViewModel: BleViewModel = viewModel()) {
                 // 연결 상태
                 StatusRow(
                     label = "BLE Connection",
-                    value = if (isConnected) "Connected" else "Disconnected",
+                    value = when (connectionState) {
+                        BleConnectionState.CONNECTED -> "Connected"
+                        BleConnectionState.RECONNECTING -> "Reconnecting..."
+                        BleConnectionState.CONNECTING -> "Connecting..."
+                        else -> "Disconnected"
+                    },
                     isOk = isConnected
                 )
                 Spacer(Modifier.height(8.dp))
