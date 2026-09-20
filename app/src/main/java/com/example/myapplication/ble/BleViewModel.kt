@@ -50,9 +50,6 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
     /** 정상 정지 */
     fun sendStop() = bleManager.sendStop()
 
-    /** ★ 긴급 정지 */
-    fun sendEmergencyStop() = bleManager.sendEmergencyStop()
-
     /** 캘리브레이션 */
     fun sendCalibrate() = bleManager.sendCalibrate()
 

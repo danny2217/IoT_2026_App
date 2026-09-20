@@ -28,7 +28,6 @@ import com.example.myapplication.ble.BleConnectionState
 import com.example.myapplication.ble.BleViewModel
 import com.example.myapplication.ble.DeviceState
 import com.example.myapplication.ble.RespirationPhase
-import com.example.myapplication.ui.components.EmergencyStopButton
 import com.example.myapplication.ui.theme.ActiveGreen
 import com.example.myapplication.ui.theme.MedicalBlueContainer
 import com.example.myapplication.ui.theme.SoftCyanContainer
@@ -151,16 +150,16 @@ fun TelemetryDashboardScreen(bleViewModel: BleViewModel = viewModel()) {
                     drawLine(Color.LightGray.copy(0.3f), Offset(0f, midY), Offset(w, midY), strokeWidth = 2f)
 
                     if (isConnected && pressureHistory.size > 2) {
-                        // ★ 실제 데이터 파형: ESP32에서 수신한 흉부 센서값
+                        // ★ 실제 데이터 파형: ESP32에서 수신한 필터링 후 흉부 호흡 센서값
                         val wavePath = Path()
-                        val maxVal = pressureHistory.maxOrNull()?.coerceAtLeast(1f) ?: 1f
-                        val minVal = pressureHistory.minOrNull()?.coerceAtMost(-1f) ?: -1f
-                        val range = (maxVal - minVal).coerceAtLeast(1f)
+                        val maxVal = pressureHistory.maxOrNull() ?: 1f
+                        val minVal = pressureHistory.minOrNull() ?: -1f
+                        val peak = maxOf(kotlin.math.abs(maxVal), kotlin.math.abs(minVal)).coerceAtLeast(10f)
 
                         pressureHistory.forEachIndexed { index, value ->
                             val x = (index.toFloat() / maxHistorySize) * w
-                            // 정규화하여 캔버스 높이에 맞춤
-                            val normalizedY = midY - ((value - (maxVal + minVal) / 2f) / range * h * 0.7f)
+                            // 필터링 후 신호는 0 기준 대칭 진동: 중앙 기준선(midY)을 중심으로 위/아래 렌더링
+                            val normalizedY = midY - (value / peak * (h / 2f) * 0.85f)
 
                             if (index == 0) wavePath.moveTo(x, normalizedY)
                             else wavePath.lineTo(x, normalizedY)
@@ -190,12 +189,12 @@ fun TelemetryDashboardScreen(bleViewModel: BleViewModel = viewModel()) {
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // 흉부 센서값 카드
+            // 흉부 센서 호흡 신호 카드 (필터링 후)
             MetricCard(
                 modifier = Modifier.weight(1f),
-                title = "CHEST PRESSURE",
+                title = "RESPIRATION SIGNAL",
                 value = if (isConnected) "${telemetry.chestPressure}" else "--",
-                unit = "ADC",
+                unit = "Filtered",
                 color = MedicalBlueContainer
             )
             // 모터 상태 카드
@@ -305,16 +304,7 @@ fun TelemetryDashboardScreen(bleViewModel: BleViewModel = viewModel()) {
             }
         }
 
-        Spacer(Modifier.height(20.dp))
 
-        // 긴급 정지 버튼
-        EmergencyStopButton(
-            onClick = {
-                if (isConnected) {
-                    bleViewModel.sendEmergencyStop()
-                }
-            }
-        )
     }
 }
 

@@ -55,7 +55,6 @@ object BleUuids {
 object CommandIds {
     const val START: Byte = 0x01
     const val STOP: Byte = 0x02
-    const val EMERGENCY_STOP: Byte = 0x03
     const val CALIBRATE: Byte = 0x04
     const val SET_PERIOD: Byte = 0x05
     // [TODO] 새 명령 추가 예시:
@@ -95,7 +94,7 @@ enum class RespirationPhase(val code: Int) {
 // ============================================================================
 data class TelemetryData(
     val deviceState: DeviceState = DeviceState.IDLE,
-    val chestPressure: Int = 0,           // 흉부 센서값 (signed 16-bit)
+    val chestPressure: Int = 0,           // 흉부 센서 호흡 신호값 (필터링 후, signed 16-bit)
     val respirationPhase: RespirationPhase = RespirationPhase.NONE,
     val motorActive: Boolean = false,      // 모터 현재 ON 여부
     val powerStatus: Int = 100,            // 전원 상태 (유선=100%)
@@ -520,9 +519,6 @@ class BleManager private constructor(private val context: Context) {
 
     /** 정상 정지 */
     fun sendStop() = sendCommand(CommandIds.STOP, mode = 0x00, periodMs = 0)
-
-    /** ★ 긴급 정지 (즉시 모터 OFF) */
-    fun sendEmergencyStop() = sendCommand(CommandIds.EMERGENCY_STOP, mode = 0x00, periodMs = 0)
 
     /** 캘리브레이션 모드 진입 */
     fun sendCalibrate() = sendCommand(CommandIds.CALIBRATE, mode = 0x00, periodMs = 0)

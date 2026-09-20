@@ -27,7 +27,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.myapplication.ble.BleConnectionState
 import com.example.myapplication.ble.BleViewModel
 import com.example.myapplication.ble.DeviceState
-import com.example.myapplication.ui.components.EmergencyStopButton
 import com.example.myapplication.ui.theme.MedicalBlueContainer
 import com.example.myapplication.ui.theme.VestGrayBackground
 
@@ -381,17 +380,6 @@ fun ControlPanelScreen(bleViewModel: BleViewModel = viewModel()) {
             }
         }
 
-        Spacer(Modifier.height(20.dp))
 
-        // =====================================================================
-        // ★ 긴급 정지 버튼 - EMERGENCY_STOP 명령 전송
-        // =====================================================================
-        EmergencyStopButton(
-            onClick = {
-                if (isConnected) {
-                    bleViewModel.sendEmergencyStop()
-                }
-            }
-        )
     }
 }
