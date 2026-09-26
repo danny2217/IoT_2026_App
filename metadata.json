@@ -1,0 +1,6 @@
+{
+  "name": "RespiSync",
+  "description": "실시간 호흡 주기 동기화 및 흉벽 진동 조끼(ESP32_Vest_BLE) 모니터링 시스템",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
