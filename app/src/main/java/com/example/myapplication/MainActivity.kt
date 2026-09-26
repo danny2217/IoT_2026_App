@@ -2,101 +2,136 @@ package com.example.myapplication
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
-import androidx.compose.animation.Crossfade
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.rememberDrawerState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.myapplication.ble.BleViewModel
-import com.example.myapplication.ui.components.RespiSyncBottomNav
-import com.example.myapplication.ui.components.RespiSyncDrawerContent
-import com.example.myapplication.ui.components.RespiSyncTopBar
+import com.example.myapplication.model.NavTab
+import com.example.myapplication.ui.components.RespiBottomBar
+import com.example.myapplication.ui.components.RespiDrawerContent
+import com.example.myapplication.ui.components.RespiTopBar
 import com.example.myapplication.ui.components.SettingsDialog
-import com.example.myapplication.ui.screens.*
+import com.example.myapplication.ui.screens.DashboardScreen
+import com.example.myapplication.ui.screens.MainScreen
+import com.example.myapplication.ui.screens.PairingScreen
 import com.example.myapplication.ui.theme.RespiSyncTheme
+import com.example.myapplication.viewmodel.RespiSyncViewModel
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         setContent {
-            var isDarkMode by remember { mutableStateOf(false) }
-            var isStarted by remember { mutableStateOf(false) }
-            var selectedTab by remember { mutableIntStateOf(0) }
-            var showSettingsDialog by remember { mutableStateOf(false) }
+            val viewModel: RespiSyncViewModel = viewModel()
+            val uiState by viewModel.uiState.collectAsState()
+            RespiSyncTheme(darkTheme = uiState.isDarkTheme) {
+                RespiSyncApp(viewModel = viewModel)
+            }
+        }
+    }
 
-            val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
-            val scope = rememberCoroutineScope()
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Composable
+    fun RespiSyncApp(viewModel: RespiSyncViewModel) {
+        val uiState by viewModel.uiState.collectAsState()
+        val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+        val coroutineScope = rememberCoroutineScope()
 
-            // ★ BleViewModel을 Activity 범위에서 생성하여 모든 화면에 공유
-            val bleViewModel: BleViewModel = viewModel()
+        if (!uiState.isStarted) {
+            MainScreen(onStartClick = { viewModel.startApp() })
+            return
+        }
 
-            RespiSyncTheme(darkTheme = isDarkMode) {
-                if (!isStarted) {
-                    MainScreen(onStartClick = { isStarted = true })
-                } else {
-                    ModalNavigationDrawer(
-                        drawerState = drawerState,
-                        drawerContent = {
-                            RespiSyncDrawerContent(
-                                selectedTab = selectedTab,
-                                onTabSelected = { tab ->
-                                    selectedTab = tab
-                                    scope.launch { drawerState.close() }
-                                },
-                                onOpenSettings = {
-                                    scope.launch { drawerState.close() }
-                                    showSettingsDialog = true
-                                }
+        BackHandler(enabled = drawerState.isOpen || uiState.currentTab != NavTab.PAIRING) {
+            if (drawerState.isOpen) {
+                coroutineScope.launch { drawerState.close() }
+            } else if (uiState.currentTab != NavTab.PAIRING) {
+                viewModel.setTab(NavTab.PAIRING)
+            }
+        }
+
+        ModalNavigationDrawer(
+            drawerState = drawerState,
+            drawerContent = {
+                RespiDrawerContent(
+                    state = uiState,
+                    onTabSelected = { tab: NavTab ->
+                        viewModel.setTab(tab)
+                        coroutineScope.launch { drawerState.close() }
+                    },
+                    onCloseDrawer = { coroutineScope.launch { drawerState.close() } },
+                    onToggleDarkTheme = { isDark -> viewModel.toggleDarkTheme(isDark) }
+                )
+            }
+        ) {
+            Scaffold(
+                topBar = {
+                    RespiTopBar(
+                        deviceName = uiState.connectedDeviceName,
+                        isConnected = uiState.isConnected,
+                        onMenuClick = { coroutineScope.launch { drawerState.open() } },
+                        onSettingsClick = { viewModel.setSettingsDialogVisible(true) }
+                    )
+                },
+                bottomBar = {
+                    RespiBottomBar(
+                        currentTab = uiState.currentTab,
+                        onTabSelected = { tab: NavTab -> viewModel.setTab(tab) },
+                        onOpenSettings = { viewModel.setSettingsDialogVisible(true) }
+                    )
+                }
+            ) { paddingValues ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(paddingValues)
+                ) {
+                    when (uiState.currentTab) {
+                        NavTab.DASHBOARD -> {
+                            DashboardScreen(
+                                state = uiState,
+                                onModeToggle = { viewModel.toggleDetectionMode() },
+                                onPhaseChange = { },
+                                onIntensityChange = { level -> viewModel.setIntensity(level) }
                             )
                         }
-                    ) {
-                        Scaffold(
-                            topBar = {
-                                RespiSyncTopBar(
-                                    title = when (selectedTab) {
-                                        0 -> "Device Pairing"
-                                        1 -> "Telemetry Dashboard"
-                                        2 -> "Control Panel"
-                                        3 -> "Calibration"
-                                        else -> "Device Pairing"
-                                    },
-                                    onMenuClick = { scope.launch { drawerState.open() } },
-                                    onSettingsClick = { showSettingsDialog = true }
-                                )
-                            },
-                            bottomBar = {
-                                RespiSyncBottomNav(
-                                    selectedItem = selectedTab,
-                                    onItemSelected = { selectedTab = it }
-                                )
-                            }
-                        ) { paddingValues ->
-                            Box(modifier = Modifier.padding(paddingValues)) {
-                                Crossfade(targetState = selectedTab, label = "TabCrossfade") { tab ->
-                                    when (tab) {
-                                        0 -> DevicePairingScreen(bleViewModel)
-                                        1 -> TelemetryDashboardScreen(bleViewModel)
-                                        2 -> ControlPanelScreen(bleViewModel)
-                                        3 -> CalibrationScreen()
-                                    }
-                                }
-                            }
+                        NavTab.PAIRING -> {
+                            PairingScreen(
+                                state = uiState,
+                                onStartScan = { viewModel.startScan() },
+                                onConnectDevice = { id -> viewModel.connectDevice(id) },
+                                onDisconnectDevice = { viewModel.disconnectDevice() },
+                                onToggleAutoReconnect = { enabled -> viewModel.toggleAutoReconnect(enabled) },
+                                onRenameDevice = { }
+                            )
                         }
-                    }
-
-                    if (showSettingsDialog) {
-                        SettingsDialog(
-                            isDarkMode = isDarkMode,
-                            onDarkModeChange = { isDarkMode = it },
-                            onDismiss = { showSettingsDialog = false }
-                        )
                     }
                 }
             }
+        }
+
+        if (uiState.showSettingsDialog) {
+            SettingsDialog(
+                isDarkMode = uiState.isDarkTheme,
+                connectedDeviceName = uiState.connectedDeviceName,
+                deviceStatus = uiState.deviceStatus,
+                onDarkModeChange = { viewModel.toggleDarkTheme(it) },
+                onDismiss = { viewModel.setSettingsDialogVisible(false) }
+            )
         }
     }
 }

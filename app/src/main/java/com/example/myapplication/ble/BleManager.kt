@@ -16,24 +16,6 @@ import java.util.UUID
  * ============================================================================
  * [RespiSync BLE Manager] - ESP32와의 BLE 통신을 전담하는 싱글톤 매니저
  * ============================================================================
- *
- * 역할:
- *   - BLE 스캔 (ESP32 디바이스 검색)
- *   - GATT 연결/해제 관리
- *   - 예기치 않은 연결 끊김(전원 OFF/거리 이탈) 시 자동 재연결(Auto-Reconnect)
- *   - 8바이트 명령 패킷 빌더 + Write
- *   - 12바이트 텔레메트리 패킷 파서 + Notify 수신
- *
- * 사용법:
- *   val bleManager = BleManager.getInstance(context)
- *   bleManager.startScan()          // 스캔 시작
- *   bleManager.connectToDevice(device)  // 연결
- *   bleManager.sendStart(periodMs)  // 타격 시작 명령
- *   bleManager.sendStop()           // 정지 명령
- *
- * 주의: 이 클래스를 사용하려면 AndroidManifest.xml에 BLE 권한이 필요합니다.
- *    (BLUETOOTH_SCAN, BLUETOOTH_CONNECT, ACCESS_FINE_LOCATION)
- * ============================================================================
  */
 
 // ============================================================================
@@ -50,20 +32,18 @@ object BleUuids {
 
 // ============================================================================
 // [명령 ID] - ESP32 펌웨어의 CMD 정의와 일치
-// 새 명령 추가 시: 여기에 상수 추가 → sendCommand() 호출하는 함수 추가
 // ============================================================================
 object CommandIds {
     const val START: Byte = 0x01
     const val STOP: Byte = 0x02
     const val CALIBRATE: Byte = 0x04
     const val SET_PERIOD: Byte = 0x05
-    // [TODO] 새 명령 추가 예시:
-    // const val SET_INTENSITY: Byte = 0x06
-    // const val ZONE_SELECT: Byte = 0x07
+    const val SET_INTENSITY: Byte = 0x06  // 강도 설정
+    const val SET_MODE: Byte = 0x07       // 인식/자율 모드 설정
 }
 
 // ============================================================================
-// [장치 상태 열거형] - 텔레메트리에서 수신되는 상태값
+// [장치 상태 열거형]
 // ============================================================================
 enum class DeviceState(val code: Int) {
     IDLE(0x00),
@@ -125,9 +105,9 @@ data class ScannedDevice(
 )
 
 // ============================================================================
-// [BleManager 싱글톤] - 앱 전체에서 하나의 인스턴스로 BLE 관리
+// [BleManager 싱글톤]
 // ============================================================================
-@SuppressLint("MissingPermission")  // 권한 체크는 UI 레이어에서 수행
+@SuppressLint("MissingPermission")
 class BleManager private constructor(private val context: Context) {
 
     companion object {
@@ -143,10 +123,10 @@ class BleManager private constructor(private val context: Context) {
         }
     }
 
-    // --- 코루틴 스코프 (자동 재연결 및 비동기 작업용) ---
+    // 코루틴 스코프 (자동 재연결 및 비동기 작업용)
     private val managerScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
-    // --- 외부 관찰용 StateFlow ---
+    // 외부 관찰용 StateFlow
     private val _connectionState = MutableStateFlow(BleConnectionState.DISCONNECTED)
     val connectionState: StateFlow<BleConnectionState> = _connectionState.asStateFlow()
 
@@ -159,7 +139,7 @@ class BleManager private constructor(private val context: Context) {
     private val _isScanning = MutableStateFlow(false)
     val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
 
-    // --- 내부 BLE 객체 ---
+    // 내부 BLE 객체
     private val bluetoothAdapter: BluetoothAdapter? by lazy {
         val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
         bluetoothManager.adapter
@@ -169,7 +149,7 @@ class BleManager private constructor(private val context: Context) {
     private var rxCharacteristic: BluetoothGattCharacteristic? = null
     private var bleScanner: BluetoothLeScanner? = null
 
-    // --- 자동 재연결 관련 변수 ---
+    // 자동 재연결 관련 변수
     private var lastConnectedDevice: BluetoothDevice? = null
     private var isExplicitDisconnect = false
     private var autoReconnectJob: Job? = null
@@ -180,52 +160,67 @@ class BleManager private constructor(private val context: Context) {
     // ========================================================================
 
     /**
-     * BLE 스캔 시작
-     * - ESP32의 Service UUID로 필터링하여 우리 디바이스만 검색
-     * - 10초 후 자동 정지 (배터리 절약)
+     * BLE 스캔 시작 (튕김 예외 방지 보안 처리 완료)
      */
     fun startScan() {
-        if (_isScanning.value) return
+        try {
+            if (!isBluetoothEnabled()) {
+                Log.e(TAG, "블루투스가 꺼져 있어 스캔을 시작할 수 없습니다.")
+                return
+            }
+            if (_isScanning.value) return
 
-        val scanner = bluetoothAdapter?.bluetoothLeScanner ?: run {
-            Log.e(TAG, "BLE 스캐너를 가져올 수 없음 (블루투스 OFF?)")
-            return
+            val scanner = bluetoothAdapter?.bluetoothLeScanner ?: run {
+                Log.e(TAG, "BLE 스캐너를 가져올 수 없음 (블루투스 OFF?)")
+                return
+            }
+
+            bleScanner = scanner
+            _scannedDevices.value = emptyList()
+            _isScanning.value = true
+            _connectionState.value = BleConnectionState.SCANNING
+
+            // Service UUID로 필터링 (우리 ESP32만 찾기)
+            val filter = ScanFilter.Builder()
+                .setServiceUuid(ParcelUuid(BleUuids.SERVICE_UUID))
+                .build()
+
+            val settings = ScanSettings.Builder()
+                .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                .build()
+
+            scanner.startScan(listOf(filter), settings, scanCallback)
+            Log.i(TAG, "BLE 스캔 시작 (Service UUID 필터)")
+        } catch (e: SecurityException) {
+            Log.e(TAG, "BLE 스캔 권한이 없습니다.", e)
+            _isScanning.value = false
+            _connectionState.value = BleConnectionState.DISCONNECTED
+        } catch (e: Exception) {
+            Log.e(TAG, "BLE 스캔 시작 중 예외 발생", e)
+            _isScanning.value = false
+            _connectionState.value = BleConnectionState.DISCONNECTED
         }
-
-        bleScanner = scanner
-        _scannedDevices.value = emptyList()
-        _isScanning.value = true
-        _connectionState.value = BleConnectionState.SCANNING
-
-        // Service UUID로 필터링 (우리 ESP32만 찾기)
-        val filter = ScanFilter.Builder()
-            .setServiceUuid(ParcelUuid(BleUuids.SERVICE_UUID))
-            .build()
-
-        val settings = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)  // 빠른 검색 (전력 소비 높음)
-            .build()
-
-        scanner.startScan(listOf(filter), settings, scanCallback)
-        Log.i(TAG, "BLE 스캔 시작 (Service UUID 필터)")
-        // [TODO] 10초 타임아웃 후 자동 정지하려면 Handler.postDelayed 사용
     }
 
     /**
      * BLE 스캔 정지
      */
     fun stopScan() {
-        if (!_isScanning.value) return
+        try {
+            if (!_isScanning.value) return
 
-        bleScanner?.stopScan(scanCallback)
-        _isScanning.value = false
-        if (_connectionState.value == BleConnectionState.SCANNING) {
-            _connectionState.value = BleConnectionState.DISCONNECTED
+            bleScanner?.stopScan(scanCallback)
+            _isScanning.value = false
+            if (_connectionState.value == BleConnectionState.SCANNING) {
+                _connectionState.value = BleConnectionState.DISCONNECTED
+            }
+            Log.i(TAG, "BLE 스캔 정지")
+        } catch (e: Exception) {
+            Log.e(TAG, "BLE 스캔 정지 중 예외 발생", e)
         }
-        Log.i(TAG, "BLE 스캔 정지")
     }
 
-    /** 스캔 콜백 - 디바이스 발견 시 호출됨 */
+    /** 스캔 콜백 */
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val device = result.device
@@ -233,7 +228,6 @@ class BleManager private constructor(private val context: Context) {
             val address = device.address
             val rssi = result.rssi
 
-            // 중복 방지
             val currentList = _scannedDevices.value.toMutableList()
             if (currentList.none { it.address == address }) {
                 currentList.add(ScannedDevice(name, address, rssi, device))
@@ -253,34 +247,23 @@ class BleManager private constructor(private val context: Context) {
     // [연결 관련]
     // ========================================================================
 
-    /**
-     * 특정 디바이스에 GATT 연결
-     * @param device 스캔에서 찾은 BluetoothDevice
-     */
     fun connectToDevice(device: BluetoothDevice) {
-        stopScan()  // 연결 시도 전 스캔 정지
-        cancelAutoReconnect() // 진행 중인 재연결 중단
+        stopScan()
+        cancelAutoReconnect()
         isExplicitDisconnect = false
         lastConnectedDevice = device
 
         _connectionState.value = BleConnectionState.CONNECTING
         Log.i(TAG, "연결 시도: ${device.name} (${device.address})")
 
-        // 기존 연결 안전하게 정리 후 재연결
         bluetoothGatt?.close()
         bluetoothGatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
     }
 
-    /**
-     * 연결된 ScannedDevice로 연결 (편의 메서드)
-     */
     fun connectToDevice(scannedDevice: ScannedDevice) {
         connectToDevice(scannedDevice.device)
     }
 
-    /**
-     * GATT 연결 해제 (사용자가 직접 명시적으로 해제할 때 호출)
-     */
     fun disconnect() {
         isExplicitDisconnect = true
         cancelAutoReconnect()
@@ -288,15 +271,11 @@ class BleManager private constructor(private val context: Context) {
         _connectionState.value = BleConnectionState.DISCONNECTING
         bluetoothGatt?.let { gatt ->
             gatt.disconnect()
-            // close()는 onConnectionStateChange 콜백에서 호출
         } ?: run {
             _connectionState.value = BleConnectionState.DISCONNECTED
         }
     }
 
-    /**
-     * 자동 재연결 프로세스 취소
-     */
     fun cancelAutoReconnect() {
         autoReconnectJob?.cancel()
         autoReconnectJob = null
@@ -311,9 +290,7 @@ class BleManager private constructor(private val context: Context) {
     }
 
     /**
-     * ★ 자동 재연결 시작 (ESP32 전원 꺼짐 등으로 예기치 않게 끊겼을 때)
-     * - 타겟 디바이스(MAC 주소)를 필터링하여 스캔을 즉시 시작
-     * - ESP32 전원이 다시 켜져 부팅 광고(Advertising)를 시작하면 1~2초 내 즉시 감지하여 자동 재연결 수행
+     * ★ 자동 재연결 프로세스
      */
     private fun startAutoReconnect() {
         val target = lastConnectedDevice ?: run {
@@ -361,7 +338,6 @@ class BleManager private constructor(private val context: Context) {
                 scanner.startScan(listOf(filter), settings, callback)
                 Log.i(TAG, "ESP32 광고 비콘 대기 중...")
 
-                // 취소될 때까지 코루틴 유지
                 while (isActive) {
                     delay(3000)
                 }
@@ -375,7 +351,7 @@ class BleManager private constructor(private val context: Context) {
         }
     }
 
-    /** GATT 콜백 - 연결 상태 변경, 서비스 발견, 데이터 수신 처리 */
+    /** GATT 콜백 */
     private val gattCallback = object : BluetoothGattCallback() {
 
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
@@ -383,16 +359,15 @@ class BleManager private constructor(private val context: Context) {
                 BluetoothProfile.STATE_CONNECTED -> {
                     Log.i(TAG, "GATT 연결 성공! 서비스 디스커버리 시작...")
                     cancelAutoReconnect()
-                    gatt.discoverServices()  // 연결 직후 서비스 탐색 필수
+                    gatt.discoverServices()
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     Log.i(TAG, "GATT 연결 해제됨 (status=$status, isExplicit=$isExplicitDisconnect)")
                     gatt.close()
                     bluetoothGatt = null
                     rxCharacteristic = null
-                    _telemetryData.value = TelemetryData()  // 텔레메트리 초기화
+                    _telemetryData.value = TelemetryData()
 
-                    // 사용자가 명시적으로 끊은 게 아니고 이전 연결 기기가 있다면 -> 자동 재연결 시작
                     if (!isExplicitDisconnect && lastConnectedDevice != null) {
                         startAutoReconnect()
                     } else {
@@ -411,7 +386,6 @@ class BleManager private constructor(private val context: Context) {
 
             Log.i(TAG, "서비스 디스커버리 완료!")
 
-            // 우리 서비스 찾기
             val service = gatt.getService(BleUuids.SERVICE_UUID)
             if (service == null) {
                 Log.e(TAG, "RespiSync 서비스를 찾을 수 없음! UUID 불일치 확인 필요")
@@ -419,19 +393,15 @@ class BleManager private constructor(private val context: Context) {
                 return
             }
 
-            // RX 캐릭터리스틱 (앱 → ESP32, Write)
             rxCharacteristic = service.getCharacteristic(BleUuids.CHARACTERISTIC_RX)
             if (rxCharacteristic == null) {
                 Log.e(TAG, "RX 캐릭터리스틱을 찾을 수 없음!")
             }
 
-            // TX 캐릭터리스틱 (ESP32 → 앱, Notify)
             val txCharacteristic = service.getCharacteristic(BleUuids.CHARACTERISTIC_TX)
             if (txCharacteristic != null) {
-                // Notify 활성화: 로컬 설정
                 gatt.setCharacteristicNotification(txCharacteristic, true)
 
-                // CCCD에 Notify 활성화 값 쓰기 (ESP32에게 알림)
                 val descriptor = txCharacteristic.getDescriptor(BleUuids.CCCD_UUID)
                 if (descriptor != null) {
                     descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
@@ -447,9 +417,6 @@ class BleManager private constructor(private val context: Context) {
             Log.i(TAG, "★ BLE 연결 완료 - 명령 전송/텔레메트리 수신 가능")
         }
 
-        /**
-         * Notify 데이터 수신 콜백 - ESP32에서 12바이트 텔레메트리가 올 때마다 호출됨
-         */
         @Deprecated("Deprecated in Java")
         override fun onCharacteristicChanged(
             gatt: BluetoothGatt,
@@ -468,21 +435,6 @@ class BleManager private constructor(private val context: Context) {
     // [명령 전송 - 8바이트 패킷 빌더]
     // ========================================================================
 
-    /**
-     * 범용 명령 패킷 빌더 + 전송
-     *
-     * 패킷 구조 (8바이트 고정):
-     *   [0] 0xAA (Header 1)
-     *   [1] 0x55 (Header 2)
-     *   [2] Command ID
-     *   [3] Mode (0x00=Standby, 0x01=Autonomous)
-     *   [4] Period Low Byte (Little Endian)
-     *   [5] Period High Byte (Little Endian)
-     *   [6] Reserved (0x00)
-     *   [7] Checksum (Byte[2]^[3]^[4]^[5]^[6])
-     *
-     * ★ 새 명령 추가 시 이 함수를 호출하는 wrapper 함수를 아래에 추가하면 됩니다.
-     */
     private fun sendCommand(commandId: Byte, mode: Byte = 0x01, periodMs: Int = 0): Boolean {
         val rxChar = rxCharacteristic ?: run {
             Log.e(TAG, "RX 캐릭터리스틱 없음 (연결 안됨?)")
@@ -512,8 +464,6 @@ class BleManager private constructor(private val context: Context) {
         return success
     }
 
-    // --- 명령별 편의 함수들 ---
-
     /** 타격 시작 (주기 지정) */
     fun sendStart(periodMs: Int = 500) = sendCommand(CommandIds.START, mode = 0x01, periodMs = periodMs)
 
@@ -523,51 +473,25 @@ class BleManager private constructor(private val context: Context) {
     /** 캘리브레이션 모드 진입 */
     fun sendCalibrate() = sendCommand(CommandIds.CALIBRATE, mode = 0x00, periodMs = 0)
 
-    /** 타격 주기 변경 (동작 중에도 실시간 적용) */
+    /** 타격 주기 변경 */
     fun sendSetPeriod(periodMs: Int) = sendCommand(CommandIds.SET_PERIOD, mode = 0x01, periodMs = periodMs)
 
-    // =========================================================================
-    // [TODO] 새 명령 추가 가이드:
-    // =========================================================================
-    // 1. CommandIds 객체에 상수 추가: const val MY_CMD: Byte = 0x06
-    // 2. 여기에 편의 함수 추가:
-    //    fun sendMyCommand(param: Int) = sendCommand(CommandIds.MY_CMD, mode = ..., periodMs = param)
-    // 3. ESP32 펌웨어의 handleCommand()에 case 추가
-    // 4. UI에서 bleManager.sendMyCommand(값) 호출
-    //
-    // 예시 - 강도 조절 명령:
-    //   fun sendSetIntensity(level: Int) = sendCommand(CommandIds.SET_INTENSITY, mode = level.toByte(), periodMs = 0)
-    // =========================================================================
+    /** 모드 변경 전송 */
+    fun sendSetMode(mode: Byte): Boolean = sendCommand(CommandIds.SET_MODE, mode = mode, periodMs = 0)
+
+    /** 강도 변경 전송 */
+    fun sendSetIntensity(level: Int): Boolean = sendCommand(CommandIds.SET_INTENSITY, mode = level.toByte(), periodMs = 0)
 
     // ========================================================================
     // [텔레메트리 패킷 파서 - 12바이트]
     // ========================================================================
 
-    /**
-     * ESP32에서 수신한 12바이트 텔레메트리 패킷 파싱
-     *
-     * 패킷 구조:
-     *   [0]  0x55 (Header 1)
-     *   [1]  0xAA (Header 2)
-     *   [2]  Device State
-     *   [3]  Chest Pressure Low (Little Endian, signed)
-     *   [4]  Chest Pressure High
-     *   [5]  Respiration Phase
-     *   [6]  Motor Active (0x00=OFF, 0x01=ON)
-     *   [7]  Power Status (0x64 = 100%)
-     *   [8]  Current Period Low (Little Endian)
-     *   [9]  Current Period High
-     *   [10] Error Code
-     *   [11] Checksum (Byte[2]~[10] XOR)
-     */
     private fun parseTelemetryPacket(data: ByteArray) {
-        // 헤더 검증
         if (data[0] != 0x55.toByte() || data[1] != 0xAA.toByte()) {
             Log.w(TAG, "텔레메트리 헤더 불일치!")
             return
         }
 
-        // 체크섬 검증: Byte[2] ~ Byte[10] XOR
         var checksum: Byte = 0
         for (i in 2..10) {
             checksum = (checksum.toInt() xor data[i].toInt()).toByte()
@@ -577,10 +501,8 @@ class BleManager private constructor(private val context: Context) {
             return
         }
 
-        // 파싱
         val deviceState = DeviceState.fromCode(data[2].toInt() and 0xFF)
         val chestPressure = (data[3].toInt() and 0xFF) or ((data[4].toInt() and 0xFF) shl 8)
-        // signed 16-bit 변환
         val signedPressure = if (chestPressure > 32767) chestPressure - 65536 else chestPressure
         val respirationPhase = RespirationPhase.fromCode(data[5].toInt() and 0xFF)
         val motorActive = (data[6].toInt() and 0xFF) == 0x01
@@ -588,7 +510,6 @@ class BleManager private constructor(private val context: Context) {
         val currentPeriod = (data[8].toInt() and 0xFF) or ((data[9].toInt() and 0xFF) shl 8)
         val errorCode = data[10].toInt() and 0xFF
 
-        // StateFlow 업데이트 (UI에서 collect하여 실시간 표시)
         _telemetryData.value = TelemetryData(
             deviceState = deviceState,
             chestPressure = signedPressure,
@@ -604,13 +525,10 @@ class BleManager private constructor(private val context: Context) {
     // [유틸리티]
     // ========================================================================
 
-    /** 현재 BLE가 연결 상태인지 확인 */
     fun isConnected(): Boolean = _connectionState.value == BleConnectionState.CONNECTED
 
-    /** 블루투스 사용 가능 여부 */
     fun isBluetoothEnabled(): Boolean = bluetoothAdapter?.isEnabled == true
 
-    /** 리소스 정리 (Activity onDestroy 시 호출) */
     fun cleanup() {
         isExplicitDisconnect = true
         cancelAutoReconnect()

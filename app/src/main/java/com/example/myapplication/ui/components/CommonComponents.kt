@@ -16,7 +16,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.myapplication.ui.theme.EmergencyRed
 import com.example.myapplication.ui.theme.MedicalBlueContainer
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -58,78 +57,6 @@ fun RespiSyncTopBar(
             containerColor = MaterialTheme.colorScheme.surface
         )
     )
-}
-
-@Composable
-fun SettingsDialog(
-    isDarkMode: Boolean,
-    onDarkModeChange: (Boolean) -> Unit,
-    onDismiss: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.Settings, contentDescription = null, tint = MedicalBlueContainer)
-                Spacer(Modifier.width(8.dp))
-                Text("Settings & App Info", fontWeight = FontWeight.Bold)
-            }
-        },
-        text = {
-            Column {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = if (isDarkMode) Icons.Default.DarkMode else Icons.Default.LightMode,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurface
-                        )
-                        Spacer(Modifier.width(10.dp))
-                        Text("Dark Theme", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-                    }
-                    Switch(
-                        checked = isDarkMode,
-                        onCheckedChange = onDarkModeChange
-                    )
-                }
-
-                HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
-
-                Text("App Information", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MedicalBlueContainer)
-                Spacer(Modifier.height(8.dp))
-
-                DialogInfoRow("App Name", "RespiSync")
-                DialogInfoRow("Version", "v1.0.0 (Build 2026)")
-                DialogInfoRow("Developer", "AAOO Team")
-                DialogInfoRow("Target Hardware", "ESP32_Vest_BLE")
-                DialogInfoRow("Status", "Medical Prototype")
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Close", fontWeight = FontWeight.Bold)
-            }
-        },
-        shape = RoundedCornerShape(20.dp),
-        containerColor = MaterialTheme.colorScheme.surface
-    )
-}
-
-@Composable
-fun DialogInfoRow(label: String, value: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Text(label, fontSize = 12.sp, color = Color.Gray)
-        Text(value, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
-    }
 }
 
 @Composable
@@ -179,7 +106,6 @@ fun RespiSyncDrawerContent(
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Spacer(Modifier.height(16.dp))
 
-            // 💡 Setup Mode 제거 ➔ 4개 핵심 메뉴로 구성
             val menuItems = listOf(
                 Pair("Device Pairing", Icons.Default.BluetoothConnected),
                 Pair("Telemetry Dashboard", Icons.Default.Analytics),
@@ -242,23 +168,30 @@ fun EmergencyStopButton(
     Button(
         onClick = onClick,
         modifier = modifier
+            .scale(scale)
             .fillMaxWidth()
-            .height(60.dp)
-            .scale(scale),
-        colors = ButtonDefaults.buttonColors(containerColor = EmergencyRed),
-        shape = RoundedCornerShape(30.dp),
+            .height(56.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = MaterialTheme.colorScheme.error,
+            contentColor = MaterialTheme.colorScheme.onError
+        ),
+        shape = RoundedCornerShape(16.dp),
         elevation = ButtonDefaults.buttonElevation(defaultElevation = 6.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Default.Warning, contentDescription = null, tint = Color.White, modifier = Modifier.size(26.dp))
-            Spacer(Modifier.width(10.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Warning,
+                contentDescription = "Emergency Stop",
+                modifier = Modifier.size(24.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
             Text(
-                "EMERGENCY STOP",
-                style = MaterialTheme.typography.titleMedium.copy(
-                    color = Color.White,
-                    fontWeight = FontWeight.Black,
-                    letterSpacing = 1.2.sp
-                )
+                text = "EMERGENCY STOP",
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp
             )
         }
     }
