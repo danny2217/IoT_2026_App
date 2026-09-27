@@ -95,7 +95,7 @@ fun RespiTopBar(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        text = "RespiSync",
+                        text = "Airhythm",
                         style = MaterialTheme.typography.titleLarge.copy(
                             fontWeight = FontWeight.Bold,
                             fontSize = 24.sp

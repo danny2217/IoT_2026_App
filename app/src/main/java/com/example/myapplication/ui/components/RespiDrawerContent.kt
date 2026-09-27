@@ -70,7 +70,7 @@ fun RespiDrawerContent(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "RespiSync",
+                    text = "Airhythm",
                     style = MaterialTheme.typography.headlineMedium.copy(
                         fontWeight = FontWeight.Bold,
                         fontSize = 24.sp
