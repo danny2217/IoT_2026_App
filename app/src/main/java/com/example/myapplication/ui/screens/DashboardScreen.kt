@@ -86,8 +86,11 @@ fun DashboardScreen(
         // 1. 실시간 호흡 파형 그래프 카드
         RespiWaveformCard(
             respirationRate = state.respirationRate,
-            ieRatio = state.ieRatio,
-            currentPhase = state.currentPhase
+            ieRatio         = state.ieRatio,
+            currentPhase    = state.currentPhase,
+            waveformBuffer  = state.waveformBuffer,
+            phaseSegments   = state.phaseSegments,
+            isConnected     = state.isConnected
         )
 
         // 2. 현재 모드 카드
