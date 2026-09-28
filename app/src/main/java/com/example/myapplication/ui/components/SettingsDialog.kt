@@ -89,8 +89,8 @@ fun SettingsDialog(
                 )
                 Spacer(Modifier.height(8.dp))
 
-                DialogInfoRow("앱 이름", "RespiSync")
-                DialogInfoRow("버전", "v1.0.0 Stable (Build 2026)")
+                DialogInfoRow("앱 이름", "Airhythm")
+                DialogInfoRow("버전", "v1.3.2 Stable (Build 2026)")
                 DialogInfoRow("개발팀", "DEVELOPED BY AAOO")
                 DialogInfoRow("연결 하드웨어", connectedDeviceName)
                 DialogInfoRow("장치 상태", deviceStatus)

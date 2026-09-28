@@ -1,10 +1,15 @@
 package com.example.myapplication
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -14,10 +19,14 @@ import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.myapplication.model.NavTab
 import com.example.myapplication.ui.components.RespiBottomBar
@@ -50,6 +59,46 @@ class MainActivity : ComponentActivity() {
         val uiState by viewModel.uiState.collectAsState()
         val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
         val coroutineScope = rememberCoroutineScope()
+        val context = LocalContext.current
+
+        val requiredPermissions = remember {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                arrayOf(
+                    Manifest.permission.BLUETOOTH_SCAN,
+                    Manifest.permission.BLUETOOTH_CONNECT
+                )
+            } else {
+                arrayOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION
+                )
+            }
+        }
+
+        val permissionLauncher = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.RequestMultiplePermissions()
+        ) { permissionsMap ->
+            val allGranted = permissionsMap.values.all { it }
+            if (allGranted) {
+                viewModel.startScan()
+            }
+        }
+
+        val startScanWithPermission: () -> Unit = {
+            val allGranted = requiredPermissions.all { perm ->
+                ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED
+            }
+            if (allGranted) {
+                viewModel.startScan()
+            } else {
+                permissionLauncher.launch(requiredPermissions)
+            }
+        }
+
+        LaunchedEffect(uiState.isStarted) {
+            if (uiState.isStarted && !uiState.isConnected) {
+                startScanWithPermission()
+            }
+        }
 
         if (!uiState.isStarted) {
             MainScreen(onStartClick = { viewModel.startApp() })
@@ -112,7 +161,7 @@ class MainActivity : ComponentActivity() {
                         NavTab.PAIRING -> {
                             PairingScreen(
                                 state = uiState,
-                                onStartScan = { viewModel.startScan() },
+                                onStartScan = startScanWithPermission,
                                 onConnectDevice = { id -> viewModel.connectDevice(id) },
                                 onDisconnectDevice = { viewModel.disconnectDevice() },
                                 onToggleAutoReconnect = { enabled -> viewModel.toggleAutoReconnect(enabled) },

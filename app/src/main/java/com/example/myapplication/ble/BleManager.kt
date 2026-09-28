@@ -152,15 +152,27 @@ class BleManager private constructor(private val context: Context) {
     // 자동 재연결 관련 변수
     private var lastConnectedDevice: BluetoothDevice? = null
     private var isExplicitDisconnect = false
+    private var isAutoReconnectEnabled = true
     private var autoReconnectJob: Job? = null
     private var reconnectScanCallback: ScanCallback? = null
+    private var scanTimeoutJob: Job? = null
+
+    fun setAutoReconnectEnabled(enabled: Boolean) {
+        isAutoReconnectEnabled = enabled
+        Log.i(TAG, "자동 재연결 설정 변경: $enabled")
+        if (!enabled) {
+            cancelAutoReconnect()
+        }
+    }
+
+    fun isAutoReconnectEnabled(): Boolean = isAutoReconnectEnabled
 
     // ========================================================================
     // [스캔 관련]
     // ========================================================================
 
     /**
-     * BLE 스캔 시작 (튕김 예외 방지 보안 처리 완료)
+     * BLE 스캔 시작 (다시 스캔 지원 및 12초 자동 타임아웃)
      */
     fun startScan() {
         try {
@@ -168,7 +180,11 @@ class BleManager private constructor(private val context: Context) {
                 Log.e(TAG, "블루투스가 꺼져 있어 스캔을 시작할 수 없습니다.")
                 return
             }
-            if (_isScanning.value) return
+
+            // 이미 스캔 중이면 기존 스캔 정지 후 다시 스캔
+            if (_isScanning.value) {
+                stopScan()
+            }
 
             val scanner = bluetoothAdapter?.bluetoothLeScanner ?: run {
                 Log.e(TAG, "BLE 스캐너를 가져올 수 없음 (블루투스 OFF?)")
@@ -180,17 +196,31 @@ class BleManager private constructor(private val context: Context) {
             _isScanning.value = true
             _connectionState.value = BleConnectionState.SCANNING
 
-            // Service UUID로 필터링 (우리 ESP32만 찾기)
-            val filter = ScanFilter.Builder()
+            // 1. Service UUID 필터
+            val filterUuid = ScanFilter.Builder()
                 .setServiceUuid(ParcelUuid(BleUuids.SERVICE_UUID))
+                .build()
+            // 2. 기기명 필터 (Scan response 고려)
+            val filterName = ScanFilter.Builder()
+                .setDeviceName("Air-Rhythm")
                 .build()
 
             val settings = ScanSettings.Builder()
                 .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
                 .build()
 
-            scanner.startScan(listOf(filter), settings, scanCallback)
-            Log.i(TAG, "BLE 스캔 시작 (Service UUID 필터)")
+            scanner.startScan(listOf(filterUuid, filterName), settings, scanCallback)
+            Log.i(TAG, "BLE 스캔 시작")
+
+            // 12초 후 자동 스캔 완료 (배터리 절약 및 다시 스캔 활성화)
+            scanTimeoutJob?.cancel()
+            scanTimeoutJob = managerScope.launch {
+                delay(12000L)
+                if (_isScanning.value) {
+                    Log.i(TAG, "BLE 스캔 타임아웃 완료")
+                    stopScan()
+                }
+            }
         } catch (e: SecurityException) {
             Log.e(TAG, "BLE 스캔 권한이 없습니다.", e)
             _isScanning.value = false
@@ -207,14 +237,17 @@ class BleManager private constructor(private val context: Context) {
      */
     fun stopScan() {
         try {
-            if (!_isScanning.value) return
+            scanTimeoutJob?.cancel()
+            scanTimeoutJob = null
 
-            bleScanner?.stopScan(scanCallback)
-            _isScanning.value = false
-            if (_connectionState.value == BleConnectionState.SCANNING) {
-                _connectionState.value = BleConnectionState.DISCONNECTED
+            if (_isScanning.value) {
+                bleScanner?.stopScan(scanCallback)
+                _isScanning.value = false
+                if (_connectionState.value == BleConnectionState.SCANNING) {
+                    _connectionState.value = BleConnectionState.DISCONNECTED
+                }
+                Log.i(TAG, "BLE 스캔 정지")
             }
-            Log.i(TAG, "BLE 스캔 정지")
         } catch (e: Exception) {
             Log.e(TAG, "BLE 스캔 정지 중 예외 발생", e)
         }
@@ -224,16 +257,22 @@ class BleManager private constructor(private val context: Context) {
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val device = result.device
-            val name = device.name ?: "Unknown"
+            val scanRecordName = result.scanRecord?.deviceName
+            val name = if (!scanRecordName.isNullOrBlank()) scanRecordName
+                       else if (!device.name.isNullOrBlank()) device.name
+                       else "Air-Rhythm"
             val address = device.address
             val rssi = result.rssi
 
             val currentList = _scannedDevices.value.toMutableList()
-            if (currentList.none { it.address == address }) {
+            val existingIndex = currentList.indexOfFirst { it.address.equals(address, ignoreCase = true) }
+            if (existingIndex >= 0) {
+                currentList[existingIndex] = ScannedDevice(name, address, rssi, device)
+            } else {
                 currentList.add(ScannedDevice(name, address, rssi, device))
-                _scannedDevices.value = currentList
-                Log.i(TAG, "디바이스 발견: $name ($address) RSSI=$rssi")
             }
+            _scannedDevices.value = currentList
+            Log.i(TAG, "디바이스 발견: $name ($address) RSSI=$rssi")
         }
 
         override fun onScanFailed(errorCode: Int) {
@@ -293,6 +332,12 @@ class BleManager private constructor(private val context: Context) {
      * ★ 자동 재연결 프로세스
      */
     private fun startAutoReconnect() {
+        if (!isAutoReconnectEnabled) {
+            Log.i(TAG, "자동 재연결이 비활성화되어 재연결을 시도하지 않습니다.")
+            _connectionState.value = BleConnectionState.DISCONNECTED
+            return
+        }
+
         val target = lastConnectedDevice ?: run {
             _connectionState.value = BleConnectionState.DISCONNECTED
             return
@@ -368,7 +413,7 @@ class BleManager private constructor(private val context: Context) {
                     rxCharacteristic = null
                     _telemetryData.value = TelemetryData()
 
-                    if (!isExplicitDisconnect && lastConnectedDevice != null) {
+                    if (!isExplicitDisconnect && isAutoReconnectEnabled && lastConnectedDevice != null) {
                         startAutoReconnect()
                     } else {
                         _connectionState.value = BleConnectionState.DISCONNECTED

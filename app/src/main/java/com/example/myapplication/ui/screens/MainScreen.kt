@@ -108,7 +108,7 @@ fun MainScreen(onStartClick: () -> Unit) {
                 Spacer(Modifier.height(16.dp))
 
                 Text(
-                    text = "RespiSync",
+                    text = "Airhythm",
                     style = MaterialTheme.typography.headlineLarge.copy(
                         color = MedicalBlueContainer,
                         fontWeight = FontWeight.Black,

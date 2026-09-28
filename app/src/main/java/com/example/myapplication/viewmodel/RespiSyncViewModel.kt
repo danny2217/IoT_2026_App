@@ -80,6 +80,7 @@ class RespiSyncViewModel(application: Application) : AndroidViewModel(applicatio
         observeBleConnection()
         observeBleTelemetry()
         observeScannedDevices()
+        observeScanningState()
     }
 
     private fun observeBleConnection() {
@@ -218,6 +219,14 @@ class RespiSyncViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    private fun observeScanningState() {
+        viewModelScope.launch {
+            bleManager.isScanning.collect { scanning ->
+                _uiState.update { it.copy(isScanning = scanning) }
+            }
+        }
+    }
+
     // --- 제어 및 상태 토글 ---
     fun startApp() { _uiState.update { it.copy(isStarted = true) } }
     fun setTab(tab: NavTab) { _uiState.update { it.copy(currentTab = tab) } }
@@ -234,6 +243,7 @@ class RespiSyncViewModel(application: Application) : AndroidViewModel(applicatio
     // 자동 재연결 토글 동작 함수
     fun toggleAutoReconnect(enabled: Boolean) {
         _uiState.update { it.copy(autoReconnect = enabled) }
+        bleManager.setAutoReconnectEnabled(enabled)
     }
 
     fun setIntensity(level: IntensityLevel) {
