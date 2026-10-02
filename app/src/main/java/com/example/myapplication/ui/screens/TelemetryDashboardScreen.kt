@@ -215,14 +215,6 @@ fun TelemetryDashboardScreen(bleViewModel: BleViewModel = viewModel()) {
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // 타격 주기 카드
-            MetricCard(
-                modifier = Modifier.weight(1f),
-                title = "STRIKE PERIOD",
-                value = if (isConnected) "${telemetry.currentPeriodMs}" else "--",
-                unit = "ms",
-                color = MedicalBlueContainer
-            )
             // 장치 상태 카드
             MetricCard(
                 modifier = Modifier.weight(1f),

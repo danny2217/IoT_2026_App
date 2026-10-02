@@ -78,7 +78,9 @@ data class TelemetryData(
     val respirationPhase: RespirationPhase = RespirationPhase.NONE,
     val motorActive: Boolean = false,      // 모터 현재 ON 여부
     val powerStatus: Int = 100,            // 전원 상태 (유선=100%)
-    val currentPeriodMs: Int = 500,        // 현재 타격 주기
+    val duty: Int = 150,                   // Byte 8: 설정 duty (150=약, 200=중, 250=강)
+    val out: Int = 0,                      // Byte 9: 실제 출력 duty
+    val mode: Int = 1,                     // Byte 10: 현재 동작 모드 (0x01=일반 모드, 0x02=호흡 감지 모드)
     val errorCode: Int = 0                 // 에러 코드
 )
 
@@ -259,8 +261,8 @@ class BleManager private constructor(private val context: Context) {
             val device = result.device
             val scanRecordName = result.scanRecord?.deviceName
             val name = if (!scanRecordName.isNullOrBlank()) scanRecordName
-                       else if (!device.name.isNullOrBlank()) device.name
-                       else "Air-Rhythm"
+            else if (!device.name.isNullOrBlank()) device.name
+            else "Air-Rhythm"
             val address = device.address
             val rssi = result.rssi
 
@@ -552,8 +554,9 @@ class BleManager private constructor(private val context: Context) {
         val respirationPhase = RespirationPhase.fromCode(data[5].toInt() and 0xFF)
         val motorActive = (data[6].toInt() and 0xFF) == 0x01
         val powerStatus = data[7].toInt() and 0xFF
-        val currentPeriod = (data[8].toInt() and 0xFF) or ((data[9].toInt() and 0xFF) shl 8)
-        val errorCode = data[10].toInt() and 0xFF
+        val dutyVal = data[8].toInt() and 0xFF
+        val outVal = data[9].toInt() and 0xFF
+        val modeVal = data[10].toInt() and 0xFF // Byte 10: 현재 동작 모드 (0x01=일반, 0x02=호흡 감지)
 
         _telemetryData.value = TelemetryData(
             deviceState = deviceState,
@@ -561,8 +564,10 @@ class BleManager private constructor(private val context: Context) {
             respirationPhase = respirationPhase,
             motorActive = motorActive,
             powerStatus = powerStatus,
-            currentPeriodMs = currentPeriod,
-            errorCode = errorCode
+            duty = dutyVal,
+            out = outVal,
+            mode = modeVal,
+            errorCode = modeVal
         )
     }
 

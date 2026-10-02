@@ -46,9 +46,10 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.myapplication.model.DetectionMode
 import com.example.myapplication.model.IntensityLevel
 import com.example.myapplication.model.RespirationPhase
-import com.example.myapplication.ui.components.RespiWaveformCard
+import com.example.myapplication.ui.components.RespiWaveformView // (RespiWaveformView인 경우 파일명/함수명에 맞게 변경)
 import com.example.myapplication.ui.theme.ActiveGreen
 import com.example.myapplication.viewmodel.RespiUiState
 
@@ -74,6 +75,8 @@ fun DashboardScreen(
         label = "dotAlpha"
     )
 
+    // 현재 감지 모드 상태 판단 (DETECTION 모드일 때만 그래프 및 호흡 단계 활성화)
+    val isDetectionMode = state.detectionMode == DetectionMode.DETECTION
     val cardBorder = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.22f))
 
     Column(
@@ -84,13 +87,14 @@ fun DashboardScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         // 1. 실시간 호흡 파형 그래프 카드
-        RespiWaveformCard(
+        RespiWaveformView(
             respirationRate = state.respirationRate,
             ieRatio         = state.ieRatio,
             currentPhase    = state.currentPhase,
             waveformBuffer  = state.waveformBuffer,
             phaseSegments   = state.phaseSegments,
-            isConnected     = state.isConnected
+            isConnected     = state.isConnected,
+            isDetectionMode = isDetectionMode // 감지 모드 여부 전달
         )
 
         // 2. 현재 모드 카드
@@ -126,42 +130,42 @@ fun DashboardScreen(
                     )
                 }
 
-                Button(
-                    onClick = onModeToggle,
+                Surface(
                     shape = RoundedCornerShape(10.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp),
-                    modifier = Modifier.testTag("mode_button")
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    modifier = Modifier.testTag("mode_indicator")
                 ) {
                     Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.Tune,
-                            contentDescription = "모드 전환",
-                            tint = MaterialTheme.colorScheme.onPrimary,
+                            contentDescription = "모드 상태",
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
                             modifier = Modifier.size(18.dp)
                         )
                         Text(
                             text = state.detectionMode.title,
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onPrimary
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
                         )
                     }
                 }
             }
         }
 
-        // 3. 호흡 상태 (수신 신호 연동 읽기 전용 상태 칩, 흰색 테두리 잔상 완벽 제거)
+        // 3. 호흡 상태 (일반 모드일 때는 비활성화 / 선택 하이라이트 제거)
         Card(
             modifier = Modifier
                 .fillMaxWidth()
+                .alpha(if (isDetectionMode) 1f else 0.5f)
                 .testTag("respiration_phase_card"),
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            border = cardBorder,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = if (isDetectionMode) 0.22f else 0.08f)),
             elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
         ) {
             Row(
@@ -172,10 +176,10 @@ fun DashboardScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "호흡 상태",
+                    text = if (isDetectionMode) "호흡 상태" else "호흡 상태 (비활성화)",
                     fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = if (isDetectionMode) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
                 Surface(
@@ -187,8 +191,8 @@ fun DashboardScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.padding(3.dp)
                     ) {
-                        // 흡기 상태
-                        val isInsp = state.currentPhase == RespirationPhase.INSPIRATION
+                        // 흡기 상태 (감지 모드일 때만 선택 표시)
+                        val isInsp = isDetectionMode && (state.currentPhase == RespirationPhase.INSPIRATION)
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(10.dp))
@@ -200,12 +204,12 @@ fun DashboardScreen(
                                 text = "흡기",
                                 fontSize = 14.sp,
                                 fontWeight = if (isInsp) FontWeight.Bold else FontWeight.Medium,
-                                color = if (isInsp) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                                color = if (isInsp) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (isDetectionMode) 1f else 0.5f)
                             )
                         }
 
-                        // 호기 상태
-                        val isExp = state.currentPhase == RespirationPhase.EXHALATION
+                        // 호기 상태 (감지 모드일 때만 선택 표시)
+                        val isExp = isDetectionMode && (state.currentPhase == RespirationPhase.EXHALATION)
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(10.dp))
@@ -229,7 +233,7 @@ fun DashboardScreen(
                                     text = "호기",
                                     fontSize = 14.sp,
                                     fontWeight = if (isExp) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (isExp) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = if (isExp) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (isDetectionMode) 1f else 0.5f)
                                 )
                             }
                         }
@@ -238,7 +242,7 @@ fun DashboardScreen(
             }
         }
 
-        // 4. 현재 강도 (모터 세기 수신 신호 자동 연동 칩, 흰색 잔상 제거)
+        // 4. 현재 강도 (모터 세기 칩)
         Card(
             modifier = Modifier
                 .fillMaxWidth()

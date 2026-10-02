@@ -87,15 +87,25 @@ class RespiSyncViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             bleManager.connectionState.collect { connState ->
                 val isConn = connState == BleConnectionState.CONNECTED
+
+                // 현재 연결된 BLE 기기의 MAC 주소 가져오기
+                val connectedAddress = bleManager.scannedDevices.value
+                    .find { bleManager.isConnected() }?.address
+
                 _uiState.update { current ->
                     current.copy(
                         isConnected = isConn,
+
+                        // ★ 핵심 수정: deviceList 내의 개별 기기 중 연결된 주소와 일치하는 항목만 isConnected = true로 변경
+                        deviceList = current.deviceList.map { item ->
+                            item.copy(isConnected = isConn && (item.id == connectedAddress))
+                        },
+
                         deviceStatus = when (connState) {
-                            BleConnectionState.CONNECTED    -> "정상 작동 중"
-                            BleConnectionState.CONNECTING   -> "연결 시도 중..."
+                            BleConnectionState.CONNECTED -> "연결됨"
+                            BleConnectionState.CONNECTING -> "연결 중..."
                             BleConnectionState.RECONNECTING -> "재연결 중..."
-                            BleConnectionState.DISCONNECTING -> "연결 해제 중..."
-                            else -> "연결 해제됨"
+                            else -> "연결 안 됨"
                         }
                     )
                 }
@@ -114,14 +124,30 @@ class RespiSyncViewModel(application: Application) : AndroidViewModel(applicatio
             bleManager.telemetryData.collect { telemetry ->
                 val now = System.currentTimeMillis()
 
-                // 1. 호흡 위상(Inhale/Exhale) 실시간 수신 및 자동 업데이트
+                // 1. 호흡 상 (Inhale/Exhale)
                 val newPhase = when (telemetry.respirationPhase) {
                     com.example.myapplication.ble.RespirationPhase.INHALE -> RespirationPhase.INSPIRATION
                     com.example.myapplication.ble.RespirationPhase.EXHALE -> RespirationPhase.EXHALATION
                     else -> _uiState.value.currentPhase
                 }
 
-                // 2. 호흡 위상 전환 감지 → I:E 비율 및 RR 계산 + 구간 세그먼트 기록
+                // 2. 수신받은 duty(Byte 8) 값을 기반으로 현재 강도 매핑
+                // (ESP32에서 150/200/250 또는 1/3/5 등으로 들어오는값 조건에 맞게 매핑)
+                val mappedIntensity = when {
+                    telemetry.duty <= 175 || telemetry.duty == 1 -> IntensityLevel.LOW
+                    telemetry.duty in 175..225 || telemetry.duty == 3 -> IntensityLevel.MEDIUM
+                    else -> IntensityLevel.HIGH
+                }
+
+                // 3. 수신받은 out(Byte 9) 값을 기반으로 현재 모드 매핑
+                // (ESP32에서 0x02=감지모드, 0x01=일반모드로 보낼 경우)
+                val mappedMode = if (telemetry.mode == 0x02 || telemetry.errorCode == 0x02) {
+                    DetectionMode.DETECTION
+                } else {
+                    DetectionMode.GENERAL
+                }
+
+                // (이후 호흡수 및 I:E 비율 계산 로직 동일...)
                 val prevPhase = _uiState.value.currentPhase
                 if (newPhase != prevPhase) {
                     val duration = now - lastPhaseChangeTime
@@ -132,7 +158,6 @@ class RespiSyncViewModel(application: Application) : AndroidViewModel(applicatio
                     }
                     lastPhaseChangeTime = now
 
-                    // 현재 진행 중인 구간의 endIndex 확정
                     val currentBufSize = waveBuffer.size
                     if (phaseSegs.isNotEmpty() && phaseSegs.last().endIndex == -1) {
                         val lastSeg = phaseSegs.last()
@@ -140,28 +165,20 @@ class RespiSyncViewModel(application: Application) : AndroidViewModel(applicatio
                             endIndex = (currentBufSize - 1).coerceAtLeast(lastSeg.startIndex)
                         )
                     }
-                    // 새 구간 시작 기록
                     phaseSegs.add(PhaseSegment(phase = newPhase, startIndex = currentBufSize))
                 }
 
-                // 3. filt 값(필터링된 호흡 파형)을 waveformBuffer에 추가
-                //    chestPressure = sense->filt (signed int16, 이미 BleManager에서 signed 변환 완료)
                 waveBuffer.add(telemetry.chestPressure.toFloat())
-
-                // 버퍼 크기 초과 시 앞에서 제거 (슬라이딩 윈도우)
                 val overflowCount = (waveBuffer.size - WAVEFORM_BUFFER_SIZE).coerceAtLeast(0)
                 if (overflowCount > 0) {
                     waveBuffer.subList(0, overflowCount).clear()
-                    // 구간 세그먼트 인덱스도 오프셋 보정
                     val iter = phaseSegs.iterator()
                     val updated = mutableListOf<PhaseSegment>()
                     while (iter.hasNext()) {
                         val seg = iter.next()
                         val newStart = seg.startIndex - overflowCount
                         val newEnd   = if (seg.endIndex == -1) -1 else seg.endIndex - overflowCount
-                        if (newEnd != -1 && newEnd < 0) {
-                            // 이 구간은 완전히 버퍼 밖으로 밀려남 → 삭제
-                        } else {
+                        if (newEnd == -1 || newEnd >= 0) {
                             updated.add(seg.copy(startIndex = newStart.coerceAtLeast(0), endIndex = newEnd))
                         }
                     }
@@ -169,21 +186,19 @@ class RespiSyncViewModel(application: Application) : AndroidViewModel(applicatio
                     phaseSegs.addAll(updated)
                 }
 
-                // 오래된 세그먼트 최대 개수 제한
                 if (phaseSegs.size > MAX_PHASE_SEGMENTS) {
                     phaseSegs.subList(0, phaseSegs.size - MAX_PHASE_SEGMENTS).clear()
                 }
 
-                // 4. 레거시 pressureBuffer (기존 호환용, 유지)
                 pressureBuffer.add(telemetry.chestPressure.toFloat())
                 if (pressureBuffer.size > 100) pressureBuffer.removeAt(0)
 
-                // 5. I:E 비율 / RR 계산
                 val totalCycleMs = (inhaleDurationMs + exhaleDurationMs).toFloat()
                 val calculatedRR = if (totalCycleMs > 0) (60000f / totalCycleMs).toInt().coerceIn(8, 30) else 16
                 val ratioVal = if (inhaleDurationMs > 0)
                     String.format("%.1f", exhaleDurationMs.toFloat() / inhaleDurationMs) else "2.0"
 
+                // 4. UI State 업데이트 시 수신받은 강도와 모드 포함
                 _uiState.update { current ->
                     current.copy(
                         batteryLevel     = telemetry.powerStatus,
@@ -193,7 +208,9 @@ class RespiSyncViewModel(application: Application) : AndroidViewModel(applicatio
                         chestPressure    = telemetry.chestPressure,
                         pressureHistory  = pressureBuffer.toList(),
                         waveformBuffer   = waveBuffer.toList(),
-                        phaseSegments    = phaseSegs.toList()
+                        phaseSegments    = phaseSegs.toList(),
+                        intensity        = mappedIntensity, // <--- 추가: 수신받은 강도 반영
+                        detectionMode    = mappedMode      // <--- 추가: 수신받은 모드 반영
                     )
                 }
             }

@@ -40,8 +40,7 @@ fun ControlPanelScreen(bleViewModel: BleViewModel = viewModel()) {
     val isRunning = telemetry.deviceState == DeviceState.RUNNING
 
     // --- UI 상태 ---
-    var intensityLevel by remember { mutableIntStateOf(3) } // 1 ~ 5 단계 (추후 강도 제어 확장용)
-    // 타격 주기를 Hz 단위로 표시 (내부적으로는 ms 단위로 ESP32에 전송)
+    var intensityLevel by remember { mutableIntStateOf(3) } // 1 ~ 5 단계
     var hzFrequency by remember { mutableStateOf(2.0f) }  // 2Hz = 500ms 주기
     val zoneActiveStates = remember { mutableStateListOf(true, true, false, false, true, true) }
 
@@ -122,14 +121,14 @@ fun ControlPanelScreen(bleViewModel: BleViewModel = viewModel()) {
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "현재 주기: ${periodMs}ms (${String.format("%.1f", hzFrequency)}Hz)",
+                    "현재 설정 주기: ${periodMs}ms (${String.format("%.1f", hzFrequency)}Hz)",
                     fontSize = 13.sp,
                     color = Color.Gray
                 )
-                // ESP32에서 실제 적용 중인 주기 표시
+                // ESP32에서 실제 적용 중인 Duty/출력 표시 (오류 고침: telemetry.duty & telemetry.out)
                 if (isRunning) {
                     Text(
-                        "ESP32 적용 중: ${telemetry.currentPeriodMs}ms",
+                        "ESP32 적용 Duty: ${telemetry.duty} (실제 출력: ${telemetry.out})",
                         fontSize = 12.sp,
                         color = MedicalBlueContainer
                     )
@@ -256,7 +255,7 @@ fun ControlPanelScreen(bleViewModel: BleViewModel = viewModel()) {
         Spacer(Modifier.height(16.dp))
 
         // =====================================================================
-        // Intensity Dial (추후 강도 조절 명령 확장용)
+        // Intensity Dial
         // =====================================================================
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -296,8 +295,6 @@ fun ControlPanelScreen(bleViewModel: BleViewModel = viewModel()) {
                                 .background(if (isSelected) MedicalBlueContainer else Color.Transparent)
                                 .clickable {
                                     intensityLevel = step
-                                    // [TODO] 추후 강도 조절 명령 추가 시 여기서 전송:
-                                    // bleViewModel.sendSetIntensity(step)
                                 },
                             contentAlignment = Alignment.Center
                         ) {
@@ -313,7 +310,7 @@ fun ControlPanelScreen(bleViewModel: BleViewModel = viewModel()) {
 
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "※ 강도 조절은 추후 PWM 모터 지원 시 활성화됩니다",
+                    "※ 강도 조절은 PWM 모터 제어 신호와 연동됩니다",
                     fontSize = 11.sp,
                     color = Color.Gray
                 )
@@ -323,7 +320,7 @@ fun ControlPanelScreen(bleViewModel: BleViewModel = viewModel()) {
         Spacer(Modifier.height(16.dp))
 
         // =====================================================================
-        // Cycle Interval (타격 주기 조절) - 실시간 BLE 전송
+        // Cycle Interval (타격 주기 조절)
         // =====================================================================
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -351,7 +348,6 @@ fun ControlPanelScreen(bleViewModel: BleViewModel = viewModel()) {
                         onClick = {
                             if (hzFrequency > 0.5f) {
                                 hzFrequency -= 0.5f
-                                // 동작 중이면 실시간으로 주기 변경 전송
                                 if (isRunning && isConnected) {
                                     val newPeriod = (1000f / hzFrequency).toInt().coerceIn(200, 2000)
                                     bleViewModel.sendSetPeriod(newPeriod)
@@ -379,7 +375,5 @@ fun ControlPanelScreen(bleViewModel: BleViewModel = viewModel()) {
                 }
             }
         }
-
-
     }
 }
